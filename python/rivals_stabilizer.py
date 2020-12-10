@@ -5,6 +5,8 @@ import time
 import copy
 import os
 import traceback
+import ffmpeg
+import subprocess as sp
 import os.path as path
 from pprint import pprint
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +22,8 @@ def is_point_in_box(point, box, camera_position):
 
 def get_points(frame, feature_detector, feature_sparsity, negate_boxes, camera_position):
     kp = feature_detector.detect(frame, None)
+    if len(kp) == 0:
+        return []
     pt = np.array([kp[i].pt for i in range(len(kp))])
     pt_key = np.sum(
         pt // feature_sparsity * np.array([frame.shape[0] // feature_sparsity, 1]),
@@ -50,8 +54,22 @@ def preproc_frame(frame, proc_xres, proc_yres, pad_x, pad_y):
     return colored, gray
 
 
+def read_logic(reader):
+    try:
+        return reader.read()
+    except Exception as e:
+        traceback.print_exc()    
+
+
+def write_logic(writer, frame_w):
+    try:
+        return writer.write(frame_w)
+    except Exception as e:
+        traceback.print_exc()    
+
+
 def core_logic(frame_r, 
-               is_first_frame,
+               frame_ctr,
                out_xres,
                out_yres,
                proc_xres,
@@ -70,7 +88,7 @@ def core_logic(frame_r,
         current_gray = np.roll(
             current_gray, (-int(camera_position[1]), -int(camera_position[0])), axis=(0,1))
 
-        if is_first_frame or len(reference_p0) == 0:
+        if frame_ctr == 0 or len(reference_p0) == 0:
             frame_w = current_colored
             frame_w = np.roll(current_colored, (-int(camera_position[1]), -int(camera_position[0])), axis=(0,1))
             if draw_features:
@@ -88,7 +106,6 @@ def core_logic(frame_r,
             current_gray = np.roll(
                 current_gray, (-int(camera_position[1]), -int(camera_position[0])), axis=(0,1))
             buckets = dict()
-
             p1, st, err = cv2.calcOpticalFlowPyrLK(
                 reference_gray, current_gray, reference_p0, None)
             diff = p1[:,0,:] - reference_p0[:,0,:]
@@ -160,8 +177,14 @@ def main(in_file='../../../example.mp4',
     reader = cv2.VideoCapture(in_file) 
 
     # output file writer
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    writer = cv2.VideoWriter(out_file, fourcc, 60.0, (out_xres, out_yres))
+    writer = (
+        ffmpeg.input(
+            'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(
+                out_xres, out_yres), r=60)
+        .output(out_file, pix_fmt='yuv420p')
+        .overwrite_output()
+        .run_async(pipe_stdin=True)
+    )
 
     # create feature detector
     feature_detector = cv2.FastFeatureDetector_create()
@@ -188,41 +211,46 @@ def main(in_file='../../../example.mp4',
     reference_p0 = None
 
     # multi-threaded main loop
-    executor = ThreadPoolExecutor(max_workers=3)
-    while ret or frame_r is not None or frame_w is not None:
-        if frame_w is not None:
-            write_thread = executor.submit(writer.write, frame_w)  # write previous frame
-            cv2.imshow('Frame', frame_w)  # draw frame on screen for debugging
-            if cv2.waitKey(1) == 27:
-                print("Terminating early.")
-                break
-            if (frame_ctr + 1) % 60 == 0:
-                print("Processed " + str((frame_ctr + 1) // 60) + " second" + ("s" if (frame_ctr + 1) // 60 != 1 else "") + " of video.")
-            frame_ctr += 1
-        if frame_r is not None:
-            core_thread = executor.submit(
-                core_logic,
-                frame_r, 
-                frame_ctr == 0,
-                out_xres,
-                out_yres,
-                proc_xres,
-                proc_yres,
-                pad_x,
-                pad_y,
-                feature_detector,
-                feature_sparsity,
-                negate_boxes,
-                draw_features,
-                camera_position,
-                reference_gray,
-                reference_p0)  # core logic on current frame
-            frame_w, camera_position, reference_gray, reference_p0 = core_thread.result()
-        if ret:
-            read_thread = executor.submit(reader.read)  # read next frame
-            ret, frame_r = read_thread.result()
-
-    writer.release()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        while ret or frame_r is not None or frame_w is not None:
+            if frame_w is not None:
+                write_thread = executor.submit(
+                    write_logic, writer.stdin, 
+                    cv2.cvtColor(frame_w, cv2.COLOR_BGR2RGB).tostring())
+                cv2.imshow('Frame', frame_w) # draw frame on screen for debugging
+                if cv2.waitKey(1) == 27:
+                    print("Terminating early.")
+                    break
+                if (frame_ctr + 1) % 60 == 0:
+                    print("Processed " + str((frame_ctr + 1) // 60) + " second" + ("s" if (frame_ctr + 1) // 60 != 1 else "") + " of video.")
+                if not ret and frame_r is None:
+                    frame_w = None
+                frame_ctr += 1
+            if frame_r is not None:
+                core_thread = executor.submit(
+                    core_logic,
+                    frame_r, 
+                    frame_ctr,
+                    out_xres,
+                    out_yres,
+                    proc_xres,
+                    proc_yres,
+                    pad_x,
+                    pad_y,
+                    feature_detector,
+                    feature_sparsity,
+                    negate_boxes,
+                    draw_features,
+                    camera_position,
+                    reference_gray,
+                    reference_p0)  # core logic on current frame
+                frame_w, camera_position, reference_gray, reference_p0 = core_thread.result()
+            if ret:
+                read_thread = executor.submit(read_logic, reader)  # read next frame
+                ret, frame_r = read_thread.result()
+    writer.stdin.close()
+    writer.stderr.close()
+    writer.communicate()
     reader.release()
 
 

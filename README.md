@@ -6,7 +6,7 @@ Many thanks to phantomphreak127 for his contributions to this project!
 
 ## Instructions
 
-Under releases, download RivalsCameraStabilize-Standalone.zip. Unzip it and run RivalsCameraStabilizer.exe, at which point you can provide your video file. The program handles most video formats as inputs, but currently only outputs to AVI.
+Under releases, download RivalsCameraStabilize-Standalone.zip. Unzip it and run RivalsCameraStabilizer.exe, at which point you can provide your video file. The program handles most video formats as inputs, and produces MP4s.
 
 You can also download example.zip to see an example of stabilized footage.
 
