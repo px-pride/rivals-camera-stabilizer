@@ -10,6 +10,7 @@ import subprocess as sp
 import os.path as path
 from pprint import pprint
 from concurrent.futures import ThreadPoolExecutor
+from PIL import ImageColor
 np.set_printoptions(threshold=np.inf)
 
 
@@ -45,24 +46,32 @@ def get_points(frame, feature_detector, feature_sparsity, negate_boxes, camera_p
     return p0
 
 
-def preproc_frame(frame, proc_xres, proc_yres, pad_x, pad_y):
+def preproc_frame(frame, proc_xres, proc_yres, pad_x, pad_y, pad_color):
+    colored = frame #[:585, :1040]
     colored = cv2.resize(
-        frame, (proc_xres, proc_yres), interpolation = cv2.INTER_AREA)
+        colored, (proc_xres, proc_yres), interpolation = cv2.INTER_NEAREST)
     colored = np.pad(
         colored, ((pad_y, pad_y), (pad_x, pad_x), (0, 0)))
-    gray = cv2.cvtColor(colored, cv2.COLOR_BGR2GRAY)  # make grayscale frame 
+    gray = cv2.cvtColor(colored, cv2.COLOR_BGR2GRAY)  # make grayscale frame
+    pad_bgr = ImageColor.getcolor(pad_color, "RGB")[::-1]
+    colored[:,:pad_x,:] = pad_bgr
+    colored[:,-pad_x:,:] = pad_bgr
+    colored[:pad_y,:,:] = pad_bgr
+    colored[-pad_y:,:,:] = pad_bgr
     return colored, gray
 
 
 def read_logic(reader):
     try:
-        return reader.read()
+        frame = reader.read()
+        return frame
     except Exception as e:
         traceback.print_exc()    
 
 
-def write_logic(writer, frame_w):
+def write_logic(writer, frame_w, tracker, frame_track):
     try:
+        tracker.write(frame_track)
         return writer.write(frame_w)
     except Exception as e:
         traceback.print_exc()    
@@ -76,6 +85,7 @@ def core_logic(frame_r,
                proc_yres,
                pad_x,
                pad_y,
+               pad_color,
                feature_detector,
                feature_sparsity,
                negate_boxes,
@@ -84,7 +94,8 @@ def core_logic(frame_r,
                reference_gray,
                reference_p0):
     try:
-        current_colored, current_gray = preproc_frame(frame_r, proc_xres, proc_yres, pad_x, pad_y)
+        current_colored, current_gray = preproc_frame(
+            frame_r, proc_xres, proc_yres, pad_x, pad_y, pad_color)
         current_gray = np.roll(
             current_gray, (-int(camera_position[1]), -int(camera_position[0])), axis=(0,1))
 
@@ -97,18 +108,13 @@ def core_logic(frame_r,
                         frame_w,
                         (box[0][0] - camera_position[0], box[0][1] - camera_position[1]),
                         (box[1][0] - camera_position[0], box[1][1] - camera_position[1]),
-                        (0, 0, 255),
-                        5)
+                        (0, 0, 255), 5)
 
         else:
-            current_colored, current_gray = preproc_frame(
-                frame_r, proc_xres, proc_yres, pad_x, pad_y)
-            current_gray = np.roll(
-                current_gray, (-int(camera_position[1]), -int(camera_position[0])), axis=(0,1))
             buckets = dict()
             p1, st, err = cv2.calcOpticalFlowPyrLK(
                 reference_gray, current_gray, reference_p0, None)
-            diff = p1[:,0,:] - reference_p0[:,0,:]
+            diff = (p1[:,0,:] - reference_p0[:,0,:]) #* 1080 / proc_yres
             for i in range(len(diff)):
                 key_x = int(round(diff[i][0]))
                 key_y = int(round(diff[i][1]))
@@ -119,6 +125,7 @@ def core_logic(frame_r,
 
             if len(buckets) > 0:
                 argmax = max(buckets, key=lambda key: len(buckets[key]))  # choose bucket with most elements
+                #argmax *= proc_yres / 1080
                 current_stage_points = list(buckets[argmax])
                 current_non_stage_points = []
                 for bucket in buckets:
@@ -148,43 +155,76 @@ def core_logic(frame_r,
                         frame_w,
                         (box[0][0] - camera_position[0], box[0][1] - camera_position[1]),
                         (box[1][0] - camera_position[0], box[1][1] - camera_position[1]),
-                        (0, 0, 255),
-                        5)
+                        (0, 0, 255), 5)
 
         reference_gray = current_gray
         reference_p0 = get_points(
             reference_gray, feature_detector, feature_sparsity, negate_boxes, camera_position)
-        frame_w = cv2.resize(frame_w, (out_xres, out_yres), interpolation = cv2.INTER_AREA)
-        return frame_w, camera_position, reference_gray, reference_p0
+        frame_w = cv2.resize(frame_w, (out_xres, out_yres), interpolation = cv2.INTER_NEAREST)
+
+        frame_track = np.zeros((proc_yres, proc_xres, 3), dtype=np.uint8)
+        frame_track[camera_position[1] + proc_yres // 2][camera_position[0] + proc_xres // 2][0] = 0
+        frame_track[camera_position[1] + proc_yres // 2][camera_position[0] + proc_xres // 2][1] = 0
+        frame_track[camera_position[1] + proc_yres // 2][camera_position[0] + proc_xres // 2][2] = 255
+
+        return frame_w, frame_track, camera_position, reference_gray, reference_p0
 
     except Exception as e:
         traceback.print_exc()
 
 
-def main(in_file='../../../example.mp4',
-         out_file='../../example_stabilized_standalone.avi',
-         out_xres=1920,
-         out_yres=1080,
-         proc_xres=960,
-         proc_yres=540,
-         pad_x=320,
-         pad_y=180,
+def main(in_file,
+         out_file='stabilized.mp4',
+         track_file='tracker.mp4',
+         out_xres=3840,
+         out_yres=2160,
+         proc_xres=1920,
+         proc_yres=1080,
+         pad_x=960,
+         pad_y=540,
+         pad_color='#00ff00',
+         fps=60.0,
+         mp4_bitrate=320000,
          feature_sparsity=40,
          feature_threshold=40,
          draw_features=False):
 
     # input file reader
-    reader = cv2.VideoCapture(in_file) 
+    reader = cv2.VideoCapture(in_file)
 
     # output file writer
-    writer = (
-        ffmpeg.input(
-            'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(
-                out_xres, out_yres), r=60)
-        .output(out_file, pix_fmt='yuv420p')
-        .overwrite_output()
-        .run_async(pipe_stdin=True)
-    )
+    if out_file.endswith('.avi'):
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        writer = cv2.VideoWriter(out_file, fourcc, fps, (out_xres, out_yres))
+    elif out_file.endswith('.mp4'):
+        writer = (
+            ffmpeg.input(
+                'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(
+                    out_xres, out_yres), r=fps)
+            .output(out_file, pix_fmt='yuv420p', video_bitrate=mp4_bitrate)
+            .overwrite_output()
+            .run_async(pipe_stdin=True)
+            .stdin
+        )
+    else:
+        raise ValueError('Only MP4 and AVI output formats supported.')
+
+    # tracking file writer
+    if track_file.endswith('.avi'):
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        tracker = cv2.VideoWriter(track_file, fourcc, fps, (proc_xres, proc_yres))
+    elif track_file.endswith('.mp4'):
+        tracker = (
+            ffmpeg.input(
+                'pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(
+                    proc_xres, proc_yres), r=fps)
+            .output(track_file, pix_fmt='yuv420p', video_bitrate=mp4_bitrate)
+            .overwrite_output()
+            .run_async(pipe_stdin=True)
+            .stdin
+        )
+    else:
+        raise ValueError('Only MP4 and AVI output formats supported.')
 
     # create feature detector
     feature_detector = cv2.FastFeatureDetector_create()
@@ -203,8 +243,9 @@ def main(in_file='../../../example.mp4',
 
     # state variables
     ret = True
-    frame_w = None
     frame_r = None
+    frame_w = None
+    frame_track = None
     frame_ctr = 0
     camera_position = [0,0]
     reference_gray = None
@@ -215,14 +256,18 @@ def main(in_file='../../../example.mp4',
         while ret or frame_r is not None or frame_w is not None:
             if frame_w is not None:
                 write_thread = executor.submit(
-                    write_logic, writer.stdin, 
-                    cv2.cvtColor(frame_w, cv2.COLOR_BGR2RGB).tostring())
-                cv2.imshow('Frame', frame_w) # draw frame on screen for debugging
+                    write_logic, writer, 
+                    cv2.cvtColor(frame_w, cv2.COLOR_BGR2RGB),#.tostring(),
+                    tracker, cv2.cvtColor(frame_track, cv2.COLOR_BGR2RGB))
+                frame_draw = cv2.resize(
+                    frame_w, (1280, 720), interpolation = cv2.INTER_NEAREST)
+                cv2.imshow('Frame', frame_draw) # draw frame on screen for debugging
                 if cv2.waitKey(1) == 27:
                     print("Terminating early.")
                     break
                 if (frame_ctr + 1) % 60 == 0:
-                    print("Processed " + str((frame_ctr + 1) // 60) + " second" + ("s" if (frame_ctr + 1) // 60 != 1 else "") + " of video.")
+                    print("Processed " + str((frame_ctr + 1) // 60) + " second" + (
+                        "s" if (frame_ctr + 1) // 60 != 1 else "") + " of video.")
                 if not ret and frame_r is None:
                     frame_w = None
                 frame_ctr += 1
@@ -237,6 +282,7 @@ def main(in_file='../../../example.mp4',
                     proc_yres,
                     pad_x,
                     pad_y,
+                    pad_color,
                     feature_detector,
                     feature_sparsity,
                     negate_boxes,
@@ -244,13 +290,23 @@ def main(in_file='../../../example.mp4',
                     camera_position,
                     reference_gray,
                     reference_p0)  # core logic on current frame
-                frame_w, camera_position, reference_gray, reference_p0 = core_thread.result()
+                frame_w, frame_track, camera_position, reference_gray, reference_p0 = core_thread.result()
             if ret:
                 read_thread = executor.submit(read_logic, reader)  # read next frame
                 ret, frame_r = read_thread.result()
-    writer.stdin.close()
-    writer.stderr.close()
-    writer.communicate()
+    
+    if out_file.endswith(".avi"):
+        writer.release()
+    elif out_file.endswith("mp4"):
+        writer.stdin.close()
+        writer.stderr.close()
+        writer.communicate()
+    if track_file.endswith(".avi"):
+        tracker.release()
+    elif track_file.endswith("mp4"):
+        tracker.stdin.close()
+        tracker.stderr.close()
+        tracker.communicate()
     reader.release()
 
 
@@ -258,12 +314,16 @@ if __name__ == '__main__':
     main(
         sys.argv[1],
         sys.argv[2],
-        int(sys.argv[3]),
+        sys.argv[3],
         int(sys.argv[4]),
         int(sys.argv[5]),
         int(sys.argv[6]),
         int(sys.argv[7]),
         int(sys.argv[8]),
         int(sys.argv[9]),
-        int(sys.argv[10]),
-        True if sys.argv[11] == "True" else False)
+        sys.argv[10],
+        float(sys.argv[11]),
+        int(sys.argv[12]),
+        int(sys.argv[13]),
+        int(sys.argv[14]),
+        sys.argv[15] == "True")

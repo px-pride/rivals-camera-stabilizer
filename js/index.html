@@ -6,15 +6,20 @@
   </head>
   <body>
     <p>This program takes Rivals of Aether footage and stabilizes the camera. This can make it easier for editors to automate their own camera work. It may also serve as a preprocessing step for other computer vision or AI work.</p>
-    <p>Please set your input and output file names. Input format is flexible; output format must be AVI. You may optionally mess with the advanced parameters.</p>
-    <p>Input File: <input id="infile" type="file"></input></p>
-    <p>Output File Name: <input id="outfile"></input></p>
-    <p>[Advanced] Output X Resolution: <input id="out_xres" value="1920"></input></p>
-    <p>[Advanced] Output Y Resolution: <input id="out_yres" value="1080"></input></p>
+    <p>Input file format is flexible; output/tracker file formats must be MP4 or AVI. You may optionally mess with the advanced parameters.</p>
+    <p>Resolutions: for the most part, we recommend using the default settings. However, you may need to increase the amount of padding depending on how much camera movement there is. If the program is running too slowly for your purposes, you can consider lowering the processing resolution. The output resolution determines the final (potentially rescaled) resolution of the output file.</p>
+    <p>Input File: <input id="in_file" type="file"></input></p>
+    <p>Output File Name: <input id="out_file"></input></p>
+    <p>Tracker File Name: <input id="track_file"></input></p>
+    <p>[Advanced] Output X Resolution: <input id="out_xres" value="3840"></input></p>
+    <p>[Advanced] Output Y Resolution: <input id="out_yres" value="2160"></input></p>
     <p>[Advanced] Processing X Resolution: <input id="proc_xres" value="960"></input></p>
     <p>[Advanced] Processing Y Resolution: <input id="proc_yres" value="540"></input></p>
-    <p>[Advanced] Padding X: <input id="pad_x" value="320"></input></p>
-    <p>[Advanced] Padding Y: <input id="pad_y" value="180"></input></p>
+    <p>[Advanced] Padding X: <input id="pad_x" value="480"></input></p>
+    <p>[Advanced] Padding Y: <input id="pad_y" value="270"></input></p>
+    <p>[Advanced] Padding Color (defaults to green): <input id="pad_color" value="#00ff00"></input></p>
+    <p>[Advanced] FPS: <input id="fps" value="60.0"></input></p>
+    <p>[Advanced] Bitrate (MP4 Only): <input id="mp4_bitrate" value="3200000"></input></p>
     <p>[Advanced] Feature Sparsity: <input id="feature_sparsity" value="40"></input></p>
     <p>[Advanced] Feature Threshold: <input id="feature_threshold" value="40"></input></p>
     <p>[Advanced] Draw Features: <input id="draw_features" value="False"></input></p>
@@ -23,6 +28,5 @@
     <p>Developed by px_pride and phantomphreak127.</p>
     <div id="result"></div>
   </body>
-
   <script src="./renderer.js"></script>
 </html>

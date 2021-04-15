@@ -4,9 +4,9 @@ const BrowserWindow = electron.BrowserWindow
 const path = require('path')
 
 
-/*************************************************************
+/*
  * window management
- *************************************************************/
+ */
 
 let mainWindow = null
 
@@ -14,7 +14,7 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({width: 800, height: 600,
     webPreferences: {
       nodeIntegration: true,
-      devTools: false
+      //devTools: false
   }})
   mainWindow.loadURL(require('url').format({
     pathname: path.join(__dirname, 'index.html'),
